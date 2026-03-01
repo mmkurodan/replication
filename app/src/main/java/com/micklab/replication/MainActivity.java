@@ -386,7 +386,7 @@ public class MainActivity extends Activity {
     private void showItemOptions(int position) {
         FileItem item = fileItems.get(position);
         String[] options = item.isDirectory ? 
-            new String[]{"Open", "Delete"} : 
+            new String[]{"Open", "Download (ZIP)", "Delete"} : 
             new String[]{"Download", "Delete"};
 
         new AlertDialog.Builder(this)
@@ -394,7 +394,12 @@ public class MainActivity extends Activity {
             .setItems(options, (d, which) -> {
                 if (item.isDirectory) {
                     if (which == 0) navigateTo(item.name);
-                    else deleteItem(item);
+                    else if (which == 1) {
+                        selectItem(position);
+                        downloadSelectedFile();
+                    } else {
+                        deleteItem(item);
+                    }
                 } else {
                     if (which == 0) {
                         selectItem(position);
