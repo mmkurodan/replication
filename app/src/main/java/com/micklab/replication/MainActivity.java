@@ -128,9 +128,9 @@ public class MainActivity extends Activity {
     }
 
     private void connect() {
-        String hostRaw = editHost.getText().toString().trim();
-        final String host = hostRaw.isEmpty() ? "localhost" : hostRaw;
-        final int port;
+        String host = editHost.getText().toString().trim();
+        if (host.isEmpty()) host = "localhost";
+        int port;
         try {
             port = Integer.parseInt(editPort.getText().toString().trim());
         } catch (NumberFormatException e) {
@@ -140,11 +140,13 @@ public class MainActivity extends Activity {
         client = new FileServerClient(host, port);
         setStatus("Connecting...");
 
+        final String connectedText = "Connected to " + host + ":" + port;
+
         executor.execute(() -> {
             boolean available = client.isServerAvailable();
             mainHandler.post(() -> {
                 if (available) {
-                    setStatus("Connected to " + host + ":" + port);
+                    setStatus(connectedText);
                     setConnected(true);
                     loadDirectory("/");
                 } else {
