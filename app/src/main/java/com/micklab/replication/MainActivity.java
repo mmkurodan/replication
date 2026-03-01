@@ -128,9 +128,9 @@ public class MainActivity extends Activity {
     }
 
     private void connect() {
-        String host = editHost.getText().toString().trim();
-        if (host.isEmpty()) host = "localhost";
-        int port;
+        String hostRaw = editHost.getText().toString().trim();
+        final String host = hostRaw.isEmpty() ? "localhost" : hostRaw;
+        final int port;
         try {
             port = Integer.parseInt(editPort.getText().toString().trim());
         } catch (NumberFormatException e) {
