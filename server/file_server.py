@@ -7,6 +7,7 @@ Provides directory listing, file upload/download functionality
 import os
 import json
 import shutil
+import tempfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
@@ -140,7 +141,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self.send_error_json("Permission denied", 403)
 
     def handle_download(self, params):
-        """Download a file"""
+        """Download a file or directory (as zip)"""
         req_path = params.get("path", [""])[0]
         abs_path = self.get_safe_path(req_path)
 
@@ -149,27 +150,47 @@ class FileServerHandler(BaseHTTPRequestHandler):
             return
 
         if not os.path.exists(abs_path):
-            self.send_error_json("File not found", 404)
+            self.send_error_json("Path not found", 404)
             return
 
-        if not os.path.isfile(abs_path):
-            self.send_error_json("Not a file", 400)
-            return
+        temp_archive = None
 
         try:
-            file_size = os.path.getsize(abs_path)
+            download_path = abs_path
+            download_name = os.path.basename(abs_path)
+
+            if os.path.isdir(abs_path):
+                dir_name = os.path.basename(abs_path.rstrip(os.sep)) or "archive"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+                    temp_archive = temp_file.name
+                archive_base = os.path.splitext(temp_archive)[0]
+                download_path = shutil.make_archive(
+                    archive_base,
+                    "zip",
+                    root_dir=os.path.dirname(abs_path),
+                    base_dir=os.path.basename(abs_path)
+                )
+                download_name = f"{dir_name}.zip"
+            elif not os.path.isfile(abs_path):
+                self.send_error_json("Not a file or directory", 400)
+                return
+
+            file_size = os.path.getsize(download_path)
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(file_size))
-            self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(abs_path)}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
-            with open(abs_path, "rb") as f:
+            with open(download_path, "rb") as f:
                 while chunk := f.read(8192):
                     self.wfile.write(chunk)
         except PermissionError:
             self.send_error_json("Permission denied", 403)
+        finally:
+            if temp_archive and os.path.exists(temp_archive):
+                os.remove(temp_archive)
 
     def handle_upload(self, params):
         """Upload a file"""
@@ -286,7 +307,7 @@ def main():
     print(f"Base directory: {BASE_DIR}")
     print(f"Endpoints:")
     print(f"  GET  /api/list?path=<path>     - List directory")
-    print(f"  GET  /api/download?path=<path> - Download file")
+    print(f"  GET  /api/download?path=<path> - Download file/folder")
     print(f"  GET  /api/info?path=<path>     - Get file info")
     print(f"  POST /api/upload?path=<path>   - Upload file")
     print(f"  POST /api/mkdir?path=<path>    - Create directory")

@@ -287,9 +287,9 @@ public class MainActivity extends Activity {
     private void downloadSelectedFile() {
         if (selectedPosition < 0 || selectedPosition >= fileItems.size()) return;
         final FileItem item = fileItems.get(selectedPosition);
-        if (item.isDirectory) return;
 
         final String remotePath = currentPath.equals("/") ? "/" + item.name : currentPath + "/" + item.name;
+        final String downloadFileName = item.isDirectory ? item.name + ".zip" : item.name;
 
         showProgress(true);
         executor.execute(() -> {
@@ -297,15 +297,15 @@ public class MainActivity extends Activity {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     // Download to a temp file then insert into MediaStore Downloads
-                    tempFile = new File(getCacheDir(), item.name);
+                    tempFile = new File(getCacheDir(), downloadFileName);
                     client.downloadFile(remotePath, tempFile, (transferred, total) -> {
                         int percent = (int) (transferred * 100 / total);
                         mainHandler.post(() -> updateProgress(percent));
                     });
 
                     ContentValues values = new ContentValues();
-                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, item.name);
-                    values.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, downloadFileName);
+                    values.put(MediaStore.MediaColumns.MIME_TYPE, item.isDirectory ? "application/zip" : "application/octet-stream");
                     values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
 
                     Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
@@ -327,7 +327,7 @@ public class MainActivity extends Activity {
                     });
                 } else {
                     File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                    File localFile = new File(downloadDir, item.name);
+                    File localFile = new File(downloadDir, downloadFileName);
 
                     client.downloadFile(remotePath, localFile, (transferred, total) -> {
                         int percent = (int) (transferred * 100 / total);
