@@ -12,6 +12,10 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.content.ContentValues;
+import android.provider.MediaStore;
+import java.io.FileInputStream;
+import java.io.OutputStream;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
@@ -282,30 +286,67 @@ public class MainActivity extends Activity {
 
     private void downloadSelectedFile() {
         if (selectedPosition < 0 || selectedPosition >= fileItems.size()) return;
-        FileItem item = fileItems.get(selectedPosition);
+        final FileItem item = fileItems.get(selectedPosition);
         if (item.isDirectory) return;
 
-        String remotePath = currentPath.equals("/") ? "/" + item.name : currentPath + "/" + item.name;
-        File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        File localFile = new File(downloadDir, item.name);
+        final String remotePath = currentPath.equals("/") ? "/" + item.name : currentPath + "/" + item.name;
 
         showProgress(true);
         executor.execute(() -> {
+            File tempFile = null;
             try {
-                client.downloadFile(remotePath, localFile, (transferred, total) -> {
-                    int percent = (int) (transferred * 100 / total);
-                    mainHandler.post(() -> updateProgress(percent));
-                });
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Download to a temp file then insert into MediaStore Downloads
+                    tempFile = new File(getCacheDir(), item.name);
+                    client.downloadFile(remotePath, tempFile, (transferred, total) -> {
+                        int percent = (int) (transferred * 100 / total);
+                        mainHandler.post(() -> updateProgress(percent));
+                    });
 
-                mainHandler.post(() -> {
-                    showProgress(false);
-                    showToast("Downloaded: " + localFile.getAbsolutePath());
-                });
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, item.name);
+                    values.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+
+                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (uri == null) throw new Exception("Failed to create MediaStore entry");
+
+                    try (FileInputStream in = new FileInputStream(tempFile);
+                         OutputStream out = getContentResolver().openOutputStream(uri)) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = in.read(buffer)) != -1) {
+                            out.write(buffer, 0, len);
+                        }
+                    }
+
+                    final Uri finalUri = uri;
+                    mainHandler.post(() -> {
+                        showProgress(false);
+                        showToast("Downloaded to: " + (finalUri != null ? finalUri.toString() : "Downloads"));
+                    });
+                } else {
+                    File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    File localFile = new File(downloadDir, item.name);
+
+                    client.downloadFile(remotePath, localFile, (transferred, total) -> {
+                        int percent = (int) (transferred * 100 / total);
+                        mainHandler.post(() -> updateProgress(percent));
+                    });
+
+                    File finalLocal = localFile;
+                    mainHandler.post(() -> {
+                        showProgress(false);
+                        showToast("Downloaded: " + finalLocal.getAbsolutePath());
+                    });
+                }
             } catch (Exception e) {
                 mainHandler.post(() -> {
                     showProgress(false);
                     showError("Download failed: " + e.getMessage());
                 });
+            } finally {
+                if (tempFile != null && tempFile.exists()) tempFile.delete();
             }
         });
     }
