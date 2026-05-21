@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="8dp">
+
+    <TextView
+        android:id="@+id/txtEditorPath"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="middle"
+        android:maxLines="2"
+        android:paddingBottom="8dp"
+        android:textColor="#666666"
+        android:textSize="12sp" />
+
+    <EditText
+        android:id="@+id/editFileContent"
+        android:layout_width="match_parent"
+        android:layout_height="400dp"
+        android:background="#FFFFFFFF"
+        android:fontFamily="monospace"
+        android:gravity="top|start"
+        android:inputType="textMultiLine|textNoSuggestions"
+        android:overScrollMode="ifContentScrolls"
+        android:padding="12dp"
+        android:scrollbars="vertical"
+        android:textIsSelectable="true" />
+</LinearLayout>

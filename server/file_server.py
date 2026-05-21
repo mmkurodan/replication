@@ -12,8 +12,20 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 from datetime import datetime
 
-PORT = 8080
-BASE_DIR = os.path.expanduser("~")
+DEFAULT_PORT = 9000
+BASE_DIR = os.path.abspath(os.path.expanduser("~"))
+
+
+def get_port():
+    """Read server port from environment with a safe default."""
+    raw_port = os.environ.get("FILE_SERVER_PORT", str(DEFAULT_PORT))
+    try:
+        return int(raw_port)
+    except ValueError:
+        return DEFAULT_PORT
+
+
+PORT = get_port()
 
 
 class FileServerHandler(BaseHTTPRequestHandler):
@@ -36,16 +48,23 @@ class FileServerHandler(BaseHTTPRequestHandler):
         if not path:
             path = "/"
         path = unquote(path)
-        abs_path = os.path.normpath(os.path.join(BASE_DIR, path.lstrip("/")))
-        if not abs_path.startswith(BASE_DIR):
+        abs_path = os.path.abspath(os.path.normpath(os.path.join(BASE_DIR, path.lstrip("/"))))
+        if os.path.commonpath([abs_path, BASE_DIR]) != BASE_DIR:
             return None
         return abs_path
+
+    def to_client_path(self, abs_path):
+        """Convert an absolute path under BASE_DIR to API path format."""
+        rel_path = os.path.relpath(abs_path, BASE_DIR)
+        if rel_path == ".":
+            return "/"
+        return "/" + rel_path.replace(os.sep, "/")
 
     def do_OPTIONS(self):
         """Handle CORS preflight"""
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -59,13 +78,24 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self.handle_list(params)
         elif path == "/api/download":
             self.handle_download(params)
+        elif path == "/api/text":
+            self.handle_read_text(params)
         elif path == "/api/info":
             self.handle_info(params)
         elif path == "/":
             self.send_json_response({
                 "service": "FileServer",
                 "version": "1.0",
-                "endpoints": ["/api/list", "/api/download", "/api/upload", "/api/mkdir", "/api/delete", "/api/info"]
+                "endpoints": [
+                    "/api/list",
+                    "/api/download",
+                    "/api/text",
+                    "/api/upload",
+                    "/api/mkdir",
+                    "/api/rename",
+                    "/api/delete",
+                    "/api/info",
+                ],
             })
         else:
             self.send_error_json("Unknown endpoint", 404)
@@ -80,6 +110,19 @@ class FileServerHandler(BaseHTTPRequestHandler):
             self.handle_upload(params)
         elif path == "/api/mkdir":
             self.handle_mkdir(params)
+        elif path == "/api/rename":
+            self.handle_rename(params)
+        else:
+            self.send_error_json("Unknown endpoint", 404)
+
+    def do_PUT(self):
+        """Handle PUT requests"""
+        parsed = urlparse(self.path)
+        path = parsed.path
+        params = parse_qs(parsed.query)
+
+        if path == "/api/text":
+            self.handle_write_text(params)
         else:
             self.send_error_json("Unknown endpoint", 404)
 
@@ -127,14 +170,8 @@ class FileServerHandler(BaseHTTPRequestHandler):
                     continue
 
             items.sort(key=lambda x: (not x["isDirectory"], x["name"].lower()))
-            rel_path = os.path.relpath(abs_path, BASE_DIR)
-            if rel_path == ".":
-                rel_path = "/"
-            else:
-                rel_path = "/" + rel_path
-
             self.send_json_response({
-                "path": rel_path,
+                "path": self.to_client_path(abs_path),
                 "items": items
             })
         except PermissionError:
@@ -244,6 +281,63 @@ class FileServerHandler(BaseHTTPRequestHandler):
         except PermissionError:
             self.send_error_json("Permission denied", 403)
 
+    def handle_rename(self, params):
+        """Rename a file or directory within the same parent directory"""
+        req_path = params.get("path", [""])[0]
+        new_name = params.get("newName", [""])[0].strip()
+        abs_path = self.get_safe_path(req_path)
+
+        if not abs_path:
+            self.send_error_json("Invalid path", 400)
+            return
+
+        if abs_path == BASE_DIR:
+            self.send_error_json("Cannot rename root", 400)
+            return
+
+        if not os.path.exists(abs_path):
+            self.send_error_json("Path not found", 404)
+            return
+
+        if not new_name or new_name in {".", ".."}:
+            self.send_error_json("Invalid new name", 400)
+            return
+
+        invalid_separators = [os.sep]
+        if os.altsep:
+            invalid_separators.append(os.altsep)
+        if any(separator in new_name for separator in invalid_separators):
+            self.send_error_json("New name must not contain path separators", 400)
+            return
+
+        if new_name == os.path.basename(abs_path):
+            self.send_json_response({
+                "success": True,
+                "path": self.to_client_path(abs_path),
+                "name": new_name,
+            })
+            return
+
+        target_path = os.path.join(os.path.dirname(abs_path), new_name)
+        if os.path.commonpath([os.path.abspath(target_path), BASE_DIR]) != BASE_DIR:
+            self.send_error_json("Invalid target path", 400)
+            return
+
+        if os.path.exists(target_path):
+            self.send_error_json("Target already exists", 409)
+            return
+
+        try:
+            os.rename(abs_path, target_path)
+            self.send_json_response({
+                "success": True,
+                "oldPath": req_path,
+                "path": self.to_client_path(target_path),
+                "name": new_name,
+            })
+        except PermissionError:
+            self.send_error_json("Permission denied", 403)
+
     def handle_delete(self, params):
         """Delete a file or directory"""
         req_path = params.get("path", [""])[0]
@@ -273,6 +367,74 @@ class FileServerHandler(BaseHTTPRequestHandler):
         except PermissionError:
             self.send_error_json("Permission denied", 403)
 
+    def handle_read_text(self, params):
+        """Read a UTF-8 text file"""
+        req_path = params.get("path", [""])[0]
+        abs_path = self.get_safe_path(req_path)
+
+        if not abs_path:
+            self.send_error_json("Invalid path", 400)
+            return
+
+        if not os.path.exists(abs_path):
+            self.send_error_json("Path not found", 404)
+            return
+
+        if not os.path.isfile(abs_path):
+            self.send_error_json("Not a file", 400)
+            return
+
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            stat = os.stat(abs_path)
+            self.send_json_response({
+                "success": True,
+                "path": self.to_client_path(abs_path),
+                "name": os.path.basename(abs_path),
+                "content": content,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+        except PermissionError:
+            self.send_error_json("Permission denied", 403)
+        except UnicodeDecodeError:
+            self.send_error_json("File is not valid UTF-8 text", 415)
+
+    def handle_write_text(self, params):
+        """Overwrite a UTF-8 text file"""
+        req_path = params.get("path", [""])[0]
+        abs_path = self.get_safe_path(req_path)
+
+        if not abs_path:
+            self.send_error_json("Invalid path", 400)
+            return
+
+        if not os.path.exists(abs_path):
+            self.send_error_json("Path not found", 404)
+            return
+
+        if not os.path.isfile(abs_path):
+            self.send_error_json("Not a file", 400)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        try:
+            content = self.rfile.read(content_length).decode("utf-8")
+            with open(abs_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            stat = os.stat(abs_path)
+            self.send_json_response({
+                "success": True,
+                "path": self.to_client_path(abs_path),
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+        except PermissionError:
+            self.send_error_json("Permission denied", 403)
+        except UnicodeDecodeError:
+            self.send_error_json("Request body is not valid UTF-8 text", 400)
+
     def handle_info(self, params):
         """Get file/directory info"""
         req_path = params.get("path", ["/"])[0]
@@ -289,7 +451,7 @@ class FileServerHandler(BaseHTTPRequestHandler):
         try:
             stat = os.stat(abs_path)
             self.send_json_response({
-                "path": req_path,
+                "path": self.to_client_path(abs_path),
                 "name": os.path.basename(abs_path) or "/",
                 "isDirectory": os.path.isdir(abs_path),
                 "size": stat.st_size,
@@ -308,9 +470,12 @@ def main():
     print(f"Endpoints:")
     print(f"  GET  /api/list?path=<path>     - List directory")
     print(f"  GET  /api/download?path=<path> - Download file/folder")
+    print(f"  GET  /api/text?path=<path>     - Read text file")
     print(f"  GET  /api/info?path=<path>     - Get file info")
+    print(f"  PUT  /api/text?path=<path>     - Save text file")
     print(f"  POST /api/upload?path=<path>   - Upload file")
     print(f"  POST /api/mkdir?path=<path>    - Create directory")
+    print(f"  POST /api/rename?path=<path>&newName=<name> - Rename file/dir")
     print(f"  DELETE /api/delete?path=<path> - Delete file/dir")
     try:
         server.serve_forever()

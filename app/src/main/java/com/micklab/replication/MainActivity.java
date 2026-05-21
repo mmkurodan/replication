@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQUEST_PERMISSIONS = 100;
     private static final int REQUEST_PICK_FILE = 101;
+    private static final int DEFAULT_PORT = 9000;
 
     private EditText editHost, editPort;
     private Button btnConnect, btnUp, btnRefresh, btnUpload, btnDownload, btnNewFolder;
@@ -93,10 +94,12 @@ public class MainActivity extends Activity {
                 navigateTo(item.name);
             } else {
                 selectItem(position);
+                openTextFile(item);
             }
         });
 
         listFiles.setOnItemLongClickListener((parent, view, position, id) -> {
+            selectItem(position);
             showItemOptions(position);
             return true;
         });
@@ -138,11 +141,12 @@ public class MainActivity extends Activity {
         try {
             port = Integer.parseInt(editPort.getText().toString().trim());
         } catch (NumberFormatException e) {
-            port = 8080;
+            port = DEFAULT_PORT;
         }
 
         client = new FileServerClient(host, port);
         setStatus("Connecting...");
+        setConnected(false);
 
         final String connectedText = "Connected to " + host + ":" + port;
 
@@ -155,6 +159,7 @@ public class MainActivity extends Activity {
                     loadDirectory("/");
                 } else {
                     setStatus("Failed to connect");
+                    setConnected(false);
                     client = null;
                 }
             });
@@ -162,9 +167,10 @@ public class MainActivity extends Activity {
     }
 
     private void setConnected(boolean connected) {
-        btnUp.setEnabled(connected);
+        btnUp.setEnabled(connected && !"/".equals(currentPath));
         btnRefresh.setEnabled(connected);
         btnUpload.setEnabled(connected);
+        btnDownload.setEnabled(connected && selectedPosition >= 0);
         btnNewFolder.setEnabled(connected);
     }
 
@@ -194,6 +200,7 @@ public class MainActivity extends Activity {
                     fileItems.clear();
                     fileItems.addAll(newItems);
                     selectedPosition = -1;
+                    btnUp.setEnabled(client != null && !"/".equals(currentPath));
                     btnDownload.setEnabled(false);
                     adapter.notifyDataSetChanged();
                 });
@@ -217,7 +224,7 @@ public class MainActivity extends Activity {
 
     private void selectItem(int position) {
         selectedPosition = position;
-        btnDownload.setEnabled(true);
+        btnDownload.setEnabled(client != null);
         adapter.notifyDataSetChanged();
     }
 
@@ -243,7 +250,7 @@ public class MainActivity extends Activity {
         String fileName = getFileName(uri);
         if (fileName == null) fileName = "uploaded_file";
 
-        String remotePath = currentPath.equals("/") ? "/" + fileName : currentPath + "/" + fileName;
+        String remotePath = buildRemotePath(fileName);
 
         showProgress(true);
         String finalFileName = fileName;
@@ -288,7 +295,7 @@ public class MainActivity extends Activity {
         if (selectedPosition < 0 || selectedPosition >= fileItems.size()) return;
         final FileItem item = fileItems.get(selectedPosition);
 
-        final String remotePath = currentPath.equals("/") ? "/" + item.name : currentPath + "/" + item.name;
+        final String remotePath = buildRemotePath(item);
         final String downloadFileName = item.isDirectory ? item.name + ".zip" : item.name;
 
         showProgress(true);
@@ -362,6 +369,8 @@ public class MainActivity extends Activity {
                 String name = input.getText().toString().trim();
                 if (!name.isEmpty()) {
                     createFolder(name);
+                } else {
+                    showError("Folder name is required");
                 }
             })
             .setNegativeButton("Cancel", null)
@@ -369,7 +378,7 @@ public class MainActivity extends Activity {
     }
 
     private void createFolder(String name) {
-        String path = currentPath.equals("/") ? "/" + name : currentPath + "/" + name;
+        String path = buildRemotePath(name);
         executor.execute(() -> {
             try {
                 client.createDirectory(path);
@@ -383,11 +392,111 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void openTextFile(FileItem item) {
+        String path = buildRemotePath(item);
+        showProgress(true);
+        executor.execute(() -> {
+            try {
+                JSONObject result = client.readTextFile(path);
+                String content = result.optString("content", "");
+                mainHandler.post(() -> {
+                    showProgress(false);
+                    showTextEditor(item.name, path, content);
+                });
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    showProgress(false);
+                    showError("Open failed: " + e.getMessage());
+                });
+            }
+        });
+    }
+
+    private void showTextEditor(String title, String path, String content) {
+        View editorView = getLayoutInflater().inflate(R.layout.dialog_text_editor, null);
+        TextView txtEditorPath = editorView.findViewById(R.id.txtEditorPath);
+        EditText editFileContent = editorView.findViewById(R.id.editFileContent);
+        txtEditorPath.setText(path);
+        editFileContent.setText(content);
+        editFileContent.setSelection(0);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(editorView)
+            .setPositiveButton("Save", null)
+            .setNegativeButton("Close", null)
+            .create();
+
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v ->
+            saveTextFile(path, editFileContent.getText().toString(), dialog)
+        ));
+
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    private void saveTextFile(String path, String content, AlertDialog dialog) {
+        showProgress(true);
+        executor.execute(() -> {
+            try {
+                client.saveTextFile(path, content);
+                mainHandler.post(() -> {
+                    showProgress(false);
+                    showToast("Saved");
+                    dialog.dismiss();
+                    loadDirectory(currentPath);
+                });
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    showProgress(false);
+                    showError("Save failed: " + e.getMessage());
+                });
+            }
+        });
+    }
+
+    private void showRenameDialog(FileItem item) {
+        EditText input = new EditText(this);
+        input.setText(item.name);
+        input.setSelection(item.name.length());
+
+        new AlertDialog.Builder(this)
+            .setTitle("Rename")
+            .setView(input)
+            .setPositiveButton("Save", (d, w) -> {
+                String newName = input.getText().toString().trim();
+                if (!newName.isEmpty()) {
+                    renameItem(item, newName);
+                } else {
+                    showError("Name is required");
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void renameItem(FileItem item, String newName) {
+        String path = buildRemotePath(item);
+        executor.execute(() -> {
+            try {
+                client.rename(path, newName);
+                mainHandler.post(() -> {
+                    showToast("Renamed");
+                    loadDirectory(currentPath);
+                });
+            } catch (Exception e) {
+                mainHandler.post(() -> showError("Rename failed: " + e.getMessage()));
+            }
+        });
+    }
+
     private void showItemOptions(int position) {
         FileItem item = fileItems.get(position);
         String[] options = item.isDirectory ? 
-            new String[]{"Open", "Download (ZIP)", "Delete"} : 
-            new String[]{"Download", "Delete"};
+            new String[]{"Open", "Rename", "Download (ZIP)", "Delete"} :
+            new String[]{"Open Text", "Download", "Rename", "Delete"};
 
         new AlertDialog.Builder(this)
             .setTitle(item.name)
@@ -395,6 +504,8 @@ public class MainActivity extends Activity {
                 if (item.isDirectory) {
                     if (which == 0) navigateTo(item.name);
                     else if (which == 1) {
+                        showRenameDialog(item);
+                    } else if (which == 2) {
                         selectItem(position);
                         downloadSelectedFile();
                     } else {
@@ -402,8 +513,12 @@ public class MainActivity extends Activity {
                     }
                 } else {
                     if (which == 0) {
+                        openTextFile(item);
+                    } else if (which == 1) {
                         selectItem(position);
                         downloadSelectedFile();
+                    } else if (which == 2) {
+                        showRenameDialog(item);
                     } else {
                         deleteItem(item);
                     }
@@ -417,7 +532,7 @@ public class MainActivity extends Activity {
             .setTitle("Delete")
             .setMessage("Delete \"" + item.name + "\"?")
             .setPositiveButton("Delete", (d, w) -> {
-                String path = currentPath.equals("/") ? "/" + item.name : currentPath + "/" + item.name;
+                String path = buildRemotePath(item);
                 executor.execute(() -> {
                     try {
                         client.delete(path);
@@ -432,6 +547,14 @@ public class MainActivity extends Activity {
             })
             .setNegativeButton("Cancel", null)
             .show();
+    }
+
+    private String buildRemotePath(FileItem item) {
+        return buildRemotePath(item.name);
+    }
+
+    private String buildRemotePath(String name) {
+        return currentPath.equals("/") ? "/" + name : currentPath + "/" + name;
     }
 
     private String getFileName(Uri uri) {

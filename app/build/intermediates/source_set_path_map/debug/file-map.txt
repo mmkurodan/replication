@@ -1,0 +1,7 @@
+com.micklab.replication.app-pngs-0 /root/replication/app/build/generated/res/pngs/debug
+com.micklab.replication.app-resValues-1 /root/replication/app/build/generated/res/resValues/debug
+com.micklab.replication.app-packageDebugResources-2 /root/replication/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
+com.micklab.replication.app-packageDebugResources-3 /root/replication/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
+com.micklab.replication.app-merged_res-4 /root/replication/app/build/intermediates/merged_res/debug
+com.micklab.replication.app-debug-5 /root/replication/app/src/debug/res
+com.micklab.replication.app-main-6 /root/replication/app/src/main/res

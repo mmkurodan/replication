@@ -6,11 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_CMD="${PYTHON_CMD:-python3}"
 SERVER_SCRIPT="$SCRIPT_DIR/server/file_server.py"
 LOG_FILE="$SCRIPT_DIR/server.log"
+FILE_SERVER_PORT="${FILE_SERVER_PORT:-9000}"
 
 usage() {
   cat <<EOF
 Usage: $0 {start|stop|status|logs}
-  start   - start server in detached tmux session ($SESSION_NAME)
+  start   - start server in detached tmux session ($SESSION_NAME) on port ${FILE_SERVER_PORT}
   stop    - stop server session
   status  - show if session running
   logs    - show recent log output
@@ -29,8 +30,8 @@ case "${1:-}" in
       exit 0
     fi
     mkdir -p "$(dirname "$LOG_FILE")"
-    tmux new-session -d -s "$SESSION_NAME" "bash -lc 'exec \"$PYTHON_CMD\" \"$SERVER_SCRIPT\" >> \"$LOG_FILE\" 2>&1'"
-    echo "Started server in tmux session: $SESSION_NAME (logs: $LOG_FILE)"
+    tmux new-session -d -s "$SESSION_NAME" "bash -lc 'export FILE_SERVER_PORT=\"$FILE_SERVER_PORT\"; exec \"$PYTHON_CMD\" \"$SERVER_SCRIPT\" >> \"$LOG_FILE\" 2>&1'"
+    echo "Started server in tmux session: $SESSION_NAME on port $FILE_SERVER_PORT (logs: $LOG_FILE)"
     ;;
   stop)
     if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
@@ -44,7 +45,7 @@ case "${1:-}" in
     ;;
   status)
     if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-      echo "Session $SESSION_NAME is running"
+      echo "Session $SESSION_NAME is running on port $FILE_SERVER_PORT"
       tmux list-panes -t "$SESSION_NAME"
     else
       echo "Session $SESSION_NAME not running"

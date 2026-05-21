@@ -10,6 +10,7 @@ import org.json.JSONArray;
  * HTTP client for file server communication
  */
 public class FileServerClient {
+    private static final String UTF_8 = "UTF-8";
     private final String baseUrl;
     private static final int TIMEOUT = 30000;
     private static final int BUFFER_SIZE = 8192;
@@ -26,7 +27,7 @@ public class FileServerClient {
      * List directory contents
      */
     public JSONObject listDirectory(String path) throws IOException {
-        String url = baseUrl + "/api/list?path=" + URLEncoder.encode(path, "UTF-8");
+        String url = baseUrl + "/api/list?path=" + URLEncoder.encode(path, UTF_8);
         return getJson(url);
     }
 
@@ -34,7 +35,15 @@ public class FileServerClient {
      * Get file/directory info
      */
     public JSONObject getInfo(String path) throws IOException {
-        String url = baseUrl + "/api/info?path=" + URLEncoder.encode(path, "UTF-8");
+        String url = baseUrl + "/api/info?path=" + URLEncoder.encode(path, UTF_8);
+        return getJson(url);
+    }
+
+    /**
+     * Read text file content from server
+     */
+    public JSONObject readTextFile(String path) throws IOException {
+        String url = baseUrl + "/api/text?path=" + URLEncoder.encode(path, UTF_8);
         return getJson(url);
     }
 
@@ -42,7 +51,7 @@ public class FileServerClient {
      * Download file from server
      */
     public void downloadFile(String remotePath, File localFile, ProgressListener listener) throws IOException {
-        String url = baseUrl + "/api/download?path=" + URLEncoder.encode(remotePath, "UTF-8");
+        String url = baseUrl + "/api/download?path=" + URLEncoder.encode(remotePath, UTF_8);
         HttpURLConnection conn = null;
         
         try {
@@ -80,7 +89,7 @@ public class FileServerClient {
      * Upload file to server
      */
     public JSONObject uploadFile(File localFile, String remotePath, ProgressListener listener) throws IOException {
-        String url = baseUrl + "/api/upload?path=" + URLEncoder.encode(remotePath, "UTF-8");
+        String url = baseUrl + "/api/upload?path=" + URLEncoder.encode(remotePath, UTF_8);
         HttpURLConnection conn = null;
 
         try {
@@ -124,7 +133,16 @@ public class FileServerClient {
      * Create directory on server
      */
     public JSONObject createDirectory(String path) throws IOException {
-        String url = baseUrl + "/api/mkdir?path=" + URLEncoder.encode(path, "UTF-8");
+        String url = baseUrl + "/api/mkdir?path=" + URLEncoder.encode(path, UTF_8);
+        return postEmpty(url);
+    }
+
+    /**
+     * Rename file or directory
+     */
+    public JSONObject rename(String path, String newName) throws IOException {
+        String url = baseUrl + "/api/rename?path=" + URLEncoder.encode(path, UTF_8)
+            + "&newName=" + URLEncoder.encode(newName, UTF_8);
         return postEmpty(url);
     }
 
@@ -132,8 +150,16 @@ public class FileServerClient {
      * Delete file or directory on server
      */
     public JSONObject delete(String path) throws IOException {
-        String url = baseUrl + "/api/delete?path=" + URLEncoder.encode(path, "UTF-8");
+        String url = baseUrl + "/api/delete?path=" + URLEncoder.encode(path, UTF_8);
         return deleteRequest(url);
+    }
+
+    /**
+     * Save text file content to server
+     */
+    public JSONObject saveTextFile(String path, String content) throws IOException {
+        String url = baseUrl + "/api/text?path=" + URLEncoder.encode(path, UTF_8);
+        return putText(url, content);
     }
 
     /**
@@ -201,6 +227,34 @@ public class FileServerClient {
             conn.setRequestMethod("DELETE");
             conn.setConnectTimeout(TIMEOUT);
             conn.setReadTimeout(TIMEOUT);
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                String error = readErrorResponse(conn);
+                throw new IOException("Server error: " + error);
+            }
+
+            return readJsonResponse(conn);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private JSONObject putText(String url, String content) throws IOException {
+        HttpURLConnection conn = null;
+        byte[] contentBytes = content.getBytes(StandardCharsets.UTF_8);
+        try {
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setRequestMethod("PUT");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(TIMEOUT);
+            conn.setReadTimeout(TIMEOUT);
+            conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
+            conn.setFixedLengthStreamingMode(contentBytes.length);
+
+            try (OutputStream out = conn.getOutputStream()) {
+                out.write(contentBytes);
+            }
 
             int responseCode = conn.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK) {
